@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { Edit3, Eye, Plus, Trash2, Code2, Save, X, Move, RotateCw, Copy, Layers } from "lucide-react";
+import { Edit3, Eye, Plus, Trash2, Code2, Save, X, Move, RotateCw, Copy, Layers, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RefreshCw, Maximize2, TrendingUp } from "lucide-react";
 
 // ============================================================
 // State machine for visualization
@@ -60,6 +60,50 @@ const DEFAULT_SVG = {
 <circle r="18" fill="url(#metal)" stroke="#0f172a" stroke-width="0.6"/>
 <circle r="14" fill="#0f172a" stroke="#475569" stroke-width="0.4"/>`,
 };
+
+// ============================================================
+// Trend data config & mock generator
+// ============================================================
+const TREND_COLORS = ["#f43f5e","#22d3ee","#a3e635","#fb923c","#c084fc","#f59e0b"];
+const TAG_CONFIGS = {
+  tank: [
+    { tag:"LV-101",  desc:"Tank Level",          unit:"%",    min:0,   max:100,  baseKey:"level",    scale:100, offset:0  },
+    { tag:"TT-101",  desc:"Tank Temperature",    unit:"°C",   min:10,  max:120,  baseKey:"pressure", scale:60,  offset:40 },
+    { tag:"PT-101",  desc:"Tank Pressure",       unit:"kPa",  min:0,   max:200,  baseKey:"pressure", scale:100, offset:80 },
+  ],
+  pump: [
+    { tag:"FT-201",  desc:"Pump Flow Rate",      unit:"m³/h", min:0,   max:50,   baseKey:"flow",     scale:30,  offset:10 },
+    { tag:"ST-201",  desc:"Pump Speed",          unit:"RPM",  min:0,   max:3000, baseKey:"rpm",      scale:1,   offset:0  },
+    { tag:"VT-201",  desc:"Vibration",           unit:"mm/s", min:0,   max:10,   baseKey:"pressure", scale:5,   offset:0  },
+  ],
+  valve: [
+    { tag:"ZT-301",  desc:"Valve Position",      unit:"%",    min:0,   max:100,  baseKey:"flow",     scale:100, offset:0  },
+    { tag:"FT-301",  desc:"Flow (upstream)",     unit:"m³/h", min:0,   max:40,   baseKey:"flow",     scale:25,  offset:5  },
+    { tag:"dPT-301", desc:"Diff. Pressure",      unit:"kPa",  min:0,   max:100,  baseKey:"pressure", scale:50,  offset:10 },
+  ],
+  exchanger: [
+    { tag:"TT-401",  desc:"Inlet Temperature",   unit:"°C",   min:20,  max:200,  baseKey:"pressure", scale:80,  offset:60 },
+    { tag:"TT-402",  desc:"Outlet Temperature",  unit:"°C",   min:20,  max:160,  baseKey:"level",    scale:60,  offset:40 },
+    { tag:"FT-401",  desc:"Shell-side Flow",     unit:"m³/h", min:0,   max:30,   baseKey:"flow",     scale:18,  offset:5  },
+  ],
+  instrument: [
+    { tag:"PT-101",  desc:"Process Pressure",    unit:"bar",  min:0,   max:10,   baseKey:"pressure", scale:10,  offset:0  },
+    { tag:"PT-102",  desc:"Reference Pressure",  unit:"bar",  min:0,   max:10,   baseKey:"level",    scale:5,   offset:2  },
+  ],
+};
+
+function generateTrendData(cfg, stateObj, points = 120, hoursBack = 4) {
+  const now = Date.now();
+  const step = (hoursBack * 3600000) / points;
+  const base = stateObj[cfg.baseKey] ?? 0.5;
+  return Array.from({ length: points }, (_, i) => {
+    const t = now - (points - i) * step;
+    const noise = (Math.random() - 0.5) * 0.04 * cfg.scale;
+    const wave  = Math.sin((i / points) * Math.PI * 6) * 0.05 * cfg.scale;
+    const v = base * cfg.scale + cfg.offset + noise + wave;
+    return { t, v: Math.max(cfg.min, Math.min(cfg.max, v)) };
+  });
+}
 
 // ============================================================
 // Animated overlay (state-driven) for each type — drawn ON TOP of base SVG
@@ -240,14 +284,15 @@ const AnimatedOverlay = ({ type, s, c, id }) => {
 // ============================================================
 // Single Symbol component (renders base SVG + animated overlay)
 // ============================================================
-const SymbolNode = ({ sym, s, c, mode, selected, onMouseDown }) => {
+const SymbolNode = ({ sym, s, c, mode, selected, onMouseDown, onSymbolClick }) => {
   const dim = SYMBOLS[sym.type] || SYMBOLS.pump;
   const baseSvg = sym.customSvg ?? DEFAULT_SVG[sym.type] ?? "";
 
   return (
     <g transform={`translate(${sym.x}, ${sym.y}) scale(${sym.scale || 1})`}
-       style={{ cursor: mode === "edit" ? "move" : "default" }}
-       onMouseDown={mode === "edit" ? (e) => onMouseDown(e, sym.id) : undefined}>
+       style={{ cursor: mode === "edit" ? "move" : "pointer" }}
+       onMouseDown={mode === "edit" ? (e) => onMouseDown(e, sym.id) : undefined}
+       onClick={mode === "viz" ? () => onSymbolClick(sym) : undefined}>
       {/* Base body — user-editable */}
       <g filter="url(#shadow)" dangerouslySetInnerHTML={{ __html: baseSvg }} />
 
@@ -298,6 +343,7 @@ export default function PIDStudio() {
   const [selectedId, setSelectedId] = useState(null);
   const [editingSvg, setEditingSvg] = useState(null);
   const [drag, setDrag] = useState(null);
+  const [trendTarget, setTrendTarget] = useState(null);
   const svgRef = useRef(null);
   const nextId = useRef(200);
 
@@ -548,7 +594,8 @@ export default function PIDStudio() {
             {symbols.map(sym => (
               <SymbolNode key={sym.id} sym={sym} s={s} c={c} mode={mode}
                           selected={selectedId === sym.id}
-                          onMouseDown={onSymbolMouseDown}/>
+                          onMouseDown={onSymbolMouseDown}
+                          onSymbolClick={setTrendTarget}/>
             ))}
           </svg>
 
@@ -615,6 +662,11 @@ export default function PIDStudio() {
       {editingSvg !== null && (
         <SvgEditor initial={editingSvg} onSave={saveCustomSvg} onCancel={() => setEditingSvg(null)}/>
       )}
+
+      {/* Trend popup */}
+      {trendTarget && (
+        <TrendPopup sym={trendTarget} s={s} onClose={() => setTrendTarget(null)}/>
+      )}
     </div>
   );
 }
@@ -670,6 +722,265 @@ const SvgEditor = ({ initial, onSave, onCancel }) => {
             <Save size={13}/> 저장
           </button>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// TrendPopup — RAPID-Trend-style industrial chart popup
+// ============================================================
+const TrendPopup = ({ sym, s, onClose }) => {
+  const [timeRange, setTimeRange] = useState(4);
+  const [visibleTags, setVisibleTags] = useState(
+    () => new Set((TAG_CONFIGS[sym.type] || []).map(t => t.tag))
+  );
+  const [pos, setPos] = useState({ x: 120, y: 60 });
+  const [dragState, setDragState] = useState(null);
+
+  const allSeries = useMemo(() =>
+    (TAG_CONFIGS[sym.type] || []).map((cfg, i) => ({
+      ...cfg,
+      color: TREND_COLORS[i % TREND_COLORS.length],
+      data: generateTrendData(cfg, s, 120, timeRange),
+    })),
+    [sym.type, s, timeRange]
+  );
+
+  const W = 660, H = 210;
+  const PAD = { top: 18, right: 18, bottom: 30, left: 54 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  const visibleSeries = allSeries.filter(d => visibleTags.has(d.tag));
+  let yMin = Infinity, yMax = -Infinity;
+  visibleSeries.forEach(d => d.data.forEach(p => {
+    if (p.v < yMin) yMin = p.v;
+    if (p.v > yMax) yMax = p.v;
+  }));
+  if (!isFinite(yMin)) { yMin = 0; yMax = 100; }
+  const yPad = (yMax - yMin) * 0.08 || 1;
+  yMin -= yPad; yMax += yPad;
+
+  const fd = allSeries[0];
+  const xMin = fd?.data[0]?.t || 0;
+  const xMax = fd?.data[fd.data.length - 1]?.t || 1;
+  const xR = xMax - xMin || 1;
+  const yR = yMax - yMin || 1;
+
+  const toX = t => PAD.left + ((t - xMin) / xR) * cW;
+  const toY = v => PAD.top + (1 - (v - yMin) / yR) * cH;
+  const mkPath = data => data.length < 2 ? '' :
+    data.map((p, i) => `${i ? 'L' : 'M'}${toX(p.t).toFixed(1)},${toY(p.v).toFixed(1)}`).join('');
+
+  const tLabels = Array.from({ length: 7 }, (_, i) => {
+    const t = xMin + (i / 6) * xR;
+    const d = new Date(t);
+    return { x: toX(t), lbl: `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` };
+  });
+  const yLabels = Array.from({ length: 5 }, (_, i) => {
+    const v = yMin + (i / 4) * yR;
+    return { y: toY(v), lbl: v.toFixed(1) };
+  });
+
+  useEffect(() => {
+    if (!dragState) return;
+    const mv = e => setPos({ x: e.clientX - dragState.ox, y: e.clientY - dragState.oy });
+    const up = () => setDragState(null);
+    window.addEventListener('mousemove', mv);
+    window.addEventListener('mouseup', up);
+    return () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); };
+  }, [dragState]);
+
+  const fmtT = d => {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  };
+  const now = new Date();
+
+  const toggleTag = tag => setVisibleTags(prev => {
+    const n = new Set(prev); n.has(tag) ? n.delete(tag) : n.add(tag); return n;
+  });
+
+  const ib = { padding:'3px 4px', background:'transparent', border:'none', cursor:'pointer',
+               color:'#64748b', borderRadius:3, display:'flex', alignItems:'center', justifyContent:'center' };
+  const hov = e => { e.currentTarget.style.color='#cbd5e1'; e.currentTarget.style.background='rgba(51,65,85,0.5)'; };
+  const lev = e => { e.currentTarget.style.color='#64748b'; e.currentTarget.style.background='transparent'; };
+
+  return (
+    <div style={{ position:'fixed', left:pos.x, top:pos.y, zIndex:400, width:742,
+                  background:'#0d0f16', border:'1px solid #252836', borderRadius:7,
+                  display:'flex', flexDirection:'column', userSelect:'none',
+                  boxShadow:'0 30px 60px -10px rgba(0,0,0,0.95), 0 0 0 1px rgba(255,255,255,0.04)' }}>
+
+      {/* Title bar */}
+      <div style={{ background:'#12141d', borderBottom:'1px solid #252836', borderRadius:'7px 7px 0 0',
+                    padding:'6px 10px', display:'flex', alignItems:'center', gap:6, cursor:'move' }}
+           onMouseDown={e => { e.preventDefault(); setDragState({ ox: e.clientX - pos.x, oy: e.clientY - pos.y }); }}>
+        <span style={{ fontFamily:'monospace', fontSize:12, fontWeight:800, color:'#ef4444', letterSpacing:3 }}>RAPID</span>
+        <span style={{ fontFamily:'monospace', fontSize:11, color:'#94a3b8', letterSpacing:1 }}>Trend</span>
+        <div style={{ width:1, height:14, background:'#252836', margin:'0 4px' }}/>
+        <TrendingUp size={12} style={{ color:'#ef4444', flexShrink:0 }}/>
+        <span style={{ fontFamily:'monospace', fontSize:12, color:'#e2e8f0', fontWeight:600 }}>{sym.tag}</span>
+        <span style={{ fontFamily:'monospace', fontSize:10, color:'#475569' }}>— {SYMBOLS[sym.type]?.name}</span>
+
+        {/* Time range pills */}
+        <div style={{ display:'flex', border:'1px solid #252836', borderRadius:4, overflow:'hidden', marginLeft:'auto', marginRight:8 }}>
+          {[1,2,4,8,12,24].map(h => (
+            <button key={h} onClick={() => setTimeRange(h)}
+                    style={{ padding:'2px 7px', fontSize:10, fontFamily:'monospace', cursor:'pointer',
+                             border:'none', outline:'none', borderRight: h !== 24 ? '1px solid #252836' : 'none',
+                             background: timeRange === h ? 'rgba(239,68,68,0.18)' : 'transparent',
+                             color: timeRange === h ? '#ef4444' : '#64748b' }}>
+              {h}H
+            </button>
+          ))}
+        </div>
+
+        {/* Toolbar icons */}
+        {[
+          { icon: <ZoomIn size={12}/>,       title:'확대' },
+          { icon: <ZoomOut size={12}/>,      title:'축소' },
+          { icon: <ChevronLeft size={12}/>,  title:'이전' },
+          { icon: <ChevronRight size={12}/>, title:'다음' },
+          { icon: <RefreshCw size={12}/>,    title:'새로고침' },
+          { icon: <Maximize2 size={12}/>,    title:'전체화면' },
+        ].map(({ icon, title }) => (
+          <button key={title} title={title} style={ib} onMouseEnter={hov} onMouseLeave={lev}>
+            {icon}
+          </button>
+        ))}
+        <div style={{ width:1, height:14, background:'#252836', margin:'0 2px' }}/>
+        <button onClick={onClose} style={ib}
+                onMouseEnter={e => { e.currentTarget.style.color='#ef4444'; e.currentTarget.style.background='rgba(239,68,68,0.12)'; }}
+                onMouseLeave={lev}>
+          <X size={13}/>
+        </button>
+      </div>
+
+      {/* Chart */}
+      <div style={{ background:'#080a10' }}>
+        <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display:'block' }}>
+          <rect width={W} height={H} fill="#080a10"/>
+          <defs>
+            <clipPath id={`tc-${sym.id}`}>
+              <rect x={PAD.left} y={PAD.top} width={cW} height={cH}/>
+            </clipPath>
+          </defs>
+
+          {yLabels.map((yl, i) => (
+            <g key={i}>
+              <line x1={PAD.left} y1={yl.y} x2={W - PAD.right} y2={yl.y}
+                    stroke={i === 0 ? '#1a2236' : '#0f1520'}
+                    strokeWidth={i === 0 ? 1 : 0.5} strokeDasharray={i === 0 ? '' : '4 5'}/>
+              <text x={PAD.left - 5} y={yl.y + 3.5} textAnchor="end" fontSize="8"
+                    fill="#334155" fontFamily="monospace">{yl.lbl}</text>
+            </g>
+          ))}
+
+          {tLabels.map((tl, i) => (
+            <g key={i}>
+              <line x1={tl.x} y1={PAD.top} x2={tl.x} y2={H - PAD.bottom}
+                    stroke="#0f1520" strokeWidth="0.5" strokeDasharray="4 5"/>
+              <text x={tl.x} y={H - PAD.bottom + 11} textAnchor="middle" fontSize="8"
+                    fill="#334155" fontFamily="monospace">{tl.lbl}</text>
+            </g>
+          ))}
+
+          <rect x={PAD.left} y={PAD.top} width={cW} height={cH} fill="none" stroke="#1a2236" strokeWidth="0.5"/>
+
+          <g clipPath={`url(#tc-${sym.id})`}>
+            {allSeries.map(series => !visibleTags.has(series.tag) ? null : (
+              <path key={series.tag} d={mkPath(series.data)}
+                    fill="none" stroke={series.color} strokeWidth="1.6" opacity="0.9"
+                    style={{ filter:`drop-shadow(0 0 3px ${series.color}60)` }}/>
+            ))}
+          </g>
+
+          {visibleSeries[0] && (
+            <text x={9} y={PAD.top + cH / 2} textAnchor="middle" fontSize="8" fill="#334155"
+                  fontFamily="monospace" transform={`rotate(-90, 9, ${PAD.top + cH / 2})`}>
+              {visibleSeries[0].unit}
+            </text>
+          )}
+        </svg>
+      </div>
+
+      {/* Playback toolbar */}
+      <div style={{ background:'#12141d', borderTop:'1px solid #252836', borderBottom:'1px solid #252836',
+                    padding:'4px 10px', display:'flex', alignItems:'center', gap:8,
+                    fontSize:10, fontFamily:'monospace' }}>
+        <div style={{ border:'1px solid #252836', borderRadius:3, padding:'3px 8px', color:'#475569' }}>
+          {fmtT(new Date(now - timeRange * 3600000))}
+        </div>
+        <div style={{ display:'flex', gap:1 }}>
+          {['|◀','◀◀','◀','⏸','▶','▶▶','▶|'].map(ic => (
+            <button key={ic}
+                    style={{ padding:'2px 5px', background:'transparent', border:'none', cursor:'pointer',
+                             color:'#475569', borderRadius:2, fontFamily:'monospace', fontSize:10 }}
+                    onMouseEnter={e => { e.currentTarget.style.color='#94a3b8'; e.currentTarget.style.background='rgba(51,65,85,0.5)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color='#475569'; e.currentTarget.style.background='transparent'; }}>
+              {ic}
+            </button>
+          ))}
+        </div>
+        <select value={timeRange} onChange={e => setTimeRange(Number(e.target.value))}
+                style={{ background:'#12141d', border:'1px solid #252836', borderRadius:3,
+                         padding:'2px 6px', fontSize:10, fontFamily:'monospace', color:'#94a3b8',
+                         cursor:'pointer', outline:'none' }}>
+          {[1,2,4,8,12,24].map(h => <option key={h} value={h}>{h}h</option>)}
+        </select>
+        <div style={{ marginLeft:'auto', border:'1px solid #252836', borderRadius:3, padding:'3px 8px', color:'#475569' }}>
+          {fmtT(now)}
+        </div>
+      </div>
+
+      {/* Tag table */}
+      <div style={{ maxHeight:168, overflowY:'auto', background:'#0d0f16', borderRadius:'0 0 7px 7px' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
+          <thead>
+            <tr style={{ background:'#12141d', borderBottom:'1px solid #1e2535' }}>
+              {['','Color',`Tag Name (${allSeries.length})`,'Description','Value','Decimal','Unit','Bottom','Top','Min','Max']
+                .map((col, ci) => (
+                  <th key={ci} style={{ padding:'5px 7px', textAlign: ci >= 4 ? 'right' : 'left',
+                                        color:'#475569', fontWeight:'normal', whiteSpace:'nowrap', fontSize:10 }}>
+                    {col}
+                  </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {allSeries.map(series => {
+              const lastVal = series.data[series.data.length - 1]?.v ?? 0;
+              const isVis = visibleTags.has(series.tag);
+              return (
+                <tr key={series.tag}
+                    style={{ borderBottom:'1px solid #111827', cursor:'pointer', opacity: isVis ? 1 : 0.4, transition:'background 0.1s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#141621'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    onClick={() => toggleTag(series.tag)}>
+                  <td style={{ padding:'4px 6px', textAlign:'center' }}>
+                    <Eye size={11} style={{ color: isVis ? '#94a3b8' : '#334155' }}/>
+                  </td>
+                  <td style={{ padding:'4px 7px' }}>
+                    <div style={{ width:14, height:10, borderRadius:2, background: isVis ? series.color : '#334155' }}/>
+                  </td>
+                  <td style={{ padding:'4px 7px', color:'#cbd5e1', whiteSpace:'nowrap' }}>{series.tag}</td>
+                  <td style={{ padding:'4px 7px', color:'#475569', whiteSpace:'nowrap' }}>{series.desc}</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:series.color, fontWeight:600, whiteSpace:'nowrap' }}>
+                    {lastVal.toFixed(2)}
+                  </td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#334155' }}>5</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#475569' }}>{series.unit}</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#334155' }}>{series.min}</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#334155' }}>{series.max}</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#1e2535' }}>-9999999</td>
+                  <td style={{ padding:'4px 7px', textAlign:'right', color:'#1e2535' }}>9999999</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );

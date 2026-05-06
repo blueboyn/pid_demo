@@ -3,6 +3,7 @@ import './App.css'
 import AnimDemo from './anim_demo.jsx'
 import PidPilot from './pid_pilot.jsx'
 import RichSymbols from './rich_symbols.jsx'
+import PidStudio from './pid_studio.jsx'
 
 const MENU_STRUCTURE = [
   {
@@ -11,6 +12,7 @@ const MENU_STRUCTURE = [
     children: [
       { id: 'anim_demo',    label: '애니메이션 데모', component: AnimDemo },
       { id: 'rich_symbols', label: '리치 심볼',       component: RichSymbols },
+      { id: 'pid_studio',   label: 'PID STUDIO',      component: PidStudio },
     ],
   },
   {
