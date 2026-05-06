@@ -3,7 +3,8 @@ import './App.css'
 import AnimDemo from './anim_demo.jsx'
 import PidPilot from './pid_pilot.jsx'
 import RichSymbols from './rich_symbols.jsx'
-import PidStudio from './pid_studio.jsx'
+import dxfConvertor from './dxf_converter_v01.jsx'
+import PidStudio04 from './pid_studio_v04.jsx'
 
 const MENU_STRUCTURE = [
   {
@@ -12,7 +13,9 @@ const MENU_STRUCTURE = [
     children: [
       { id: 'anim_demo',    label: '애니메이션 데모', component: AnimDemo },
       { id: 'rich_symbols', label: '리치 심볼',       component: RichSymbols },
-      { id: 'pid_studio',   label: 'PID STUDIO',      component: PidStudio },
+     /* { id: 'pid_studio',   label: 'PID STUDIO',      component: PidStudio }, */
+      { id: 'pid_studio_v04', label: 'PID STUDIO v04', component: PidStudio04 },
+      { id: 'dxf_convertor', label: 'DXF 변환기', component: dxfConvertor },
     ],
   },
   {
